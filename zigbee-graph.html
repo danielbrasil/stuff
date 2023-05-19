@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Zigbee graph</title>
+    <meta charset="utf-8">
+    <script src="//unpkg.com/@github/tab-container-element@latest/dist/index.js" type="module"></script>
+    <script src="//unpkg.com/force-graph"></script>
+    <link rel="stylesheet" type="text/css" href="//necolas.github.io/normalize.css/8.0.1/normalize.css">
+    <style>
+
+    body {
+        margin: 0;
+        padding: 0;
+        font: 1rem sans-serif;
+    }
+
+    /* Tabs */
+    [role="tablist"] {
+        margin: 0 0 -.1em;
+        overflow: visible;
+    }
+
+    [role="tab"] {
+        position: relative;
+        margin: 0;
+        padding: .3em .5em .4em;
+        border: 1px solid hsl(219, 1%, 72%);
+        border-radius: .2em .2em 0 0;
+        box-shadow: 0 0 .2em hsl(219, 1%, 72%);
+        overflow: visible;
+        font-family: inherit;
+        font-size: inherit;
+        background: hsl(220, 20%, 94%);
+    }
+
+    [role="tab"]:hover::before,
+    [role="tab"]:focus::before,
+    [role="tab"][aria-selected="true"]::before {
+        position: absolute;
+        bottom: 100%;
+        right: -1px;
+        left: -1px;
+        border-radius: 0.2em 0.2em 0 0;
+        border-top: 3px solid hsl(20, 96%, 48%);
+        content: '';
+    }
+
+    [role="tab"][aria-selected="true"] {
+        border-radius: 0;
+        background: hsl(220, 43%, 99%);
+        outline: 0;
+    }
+
+    [role="tab"][aria-selected="true"]:not(:focus):not(:hover)::before {
+        border-top: 5px solid hsl(218, 96%, 48%);
+    }
+
+    [role="tab"][aria-selected="true"]::after {
+        position: absolute;
+        z-index: 3;
+        bottom: -1px;
+        right: 0;
+        left: 0;
+        height: .3em;
+        background: hsl(220, 43%, 99%);
+        box-shadow: none;
+        content: '';
+    }
+
+    [role="tab"]:hover,
+    [role="tab"]:focus,
+    [role="tab"]:active {
+        outline: 0;
+        border-radius: 0;
+        color: inherit;
+    }
+
+    [role="tab"]:hover::before,
+    [role="tab"]:focus::before {
+        border-color: hsl(20, 96%, 48%);
+    }
+
+    [role="tabpanel"] {
+        position: relative;
+        z-index: 2;
+        padding: .5em .5em .7em;
+        border: 1px solid hsl(219, 1%, 72%);
+        border-radius: 0 .2em .2em .2em;
+        box-shadow: 0 0 .2em hsl(219, 1%, 72%);
+        background: hsl(220, 43%, 99%);
+
+    }
+
+    [role="tabpanel"]:focus {
+        border-color: hsl(20, 96%, 48%);
+        box-shadow: 0 0 .2em hsl(20, 96%, 48%);
+        outline: 0;
+    }
+
+    [role="tabpanel"]:focus::after {
+        position: absolute;
+        bottom: 0;
+        right: -1px;
+        left: -1px;
+        border-bottom: 3px solid hsl(20, 96%, 48%);
+        border-radius: 0 0 0.2em 0.2em;
+        content: '';
+    }
+
+    /* Form */
+    #form {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        background-color: white;
+        opacity: 0.7;
+    }
+
+    #url {
+        width: 25em;
+    }
+
+    #pasted {
+        display: block;
+        width: 120em;
+        height: 56em;
+        margin-bottom: 10px;
+        font: 0.75rem monospace;
+        background-color: #F8F8F8;
+    }
+    </style>
+</head>
+<body>
+    <!-- Graph placeholder -->
+    <div id="graph"></div>
+
+    <!-- Collect form -->
+    <div id="form">
+        <tab-container>
+            <div role="tablist">
+                <button type="button" id="tab-one" role="tab" tabindex="0" aria-selected="true">Load from URL</button>
+                <button type="button" id="tab-two" role="tab" tabindex="-1">Paste content</button>
+            </div>
+            <div role="tabpanel" aria-labelledby="tab-one">
+                <input type="text" id="url" value="/hub/zigbee/getChildAndRouteInfo">
+                <button onclick="fetchData()">Fetch data</button>
+            </div>
+            <div role="tabpanel" aria-labelledby="tab-two" hidden>
+                <textarea id="pasted" placeholder="Parent child parameters
+EzspGetParentChildParametersResponse [childCount=6, parentEui64=0000000000000000, parentNodeId=65535]
+...
+
+# Paste here the output from http://{HUBITAT_IP}/hub/zigbee/getChildAndRouteInfo
+                "></textarea>
+                <button onclick="renderData()">Render data</button>
+            </div>
+        </tab-container>
+    </div>
+
+    <script>
+    var Graph;
+
+    function fetchData() {
+        const url = document.getElementById('url').value;
+        if (url == '') {
+            alert('Bad URL');
+            document.getElementById('url').focus();
+            return;
+        }
+
+        console.log(`Retrieving data from ${url}...`);       
+        return fetch(new Request(url), {cache: 'no-store'})
+            .then((response) => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error, status = ${response.status}`);
+                }
+                return response.text();
+            })
+            .then((text) => {
+                document.getElementById('pasted').value = text;
+                renderGraph(text);
+            })
+            .catch((error) => {
+                alert(error.message);
+            });
+    }
+
+    function renderData() {
+        const text = document.getElementById('pasted').value;
+        if (text == '') {
+            document.getElementById('pasted').focus();
+            return;
+        }
+        document.getElementById('tab-one').click();
+        renderGraph(text);
+    }
+
+    function addNode(dataset, name) {
+        if (dataset.nodes.find(node => node.id === name)) return;
+        dataset.nodes.push({
+            id: name,
+            type: 'active'
+        });
+    }
+
+    function addLink(dataset, source, target, type, label) {
+        addNode(dataset, source);
+        addNode(dataset, target);
+        dataset.links.push({
+            source: source,
+            target: target,
+            type: type,
+            label: label
+        });
+    }
+
+    function findPassiveNodes(dataset) {
+        for (const node of dataset.nodes) {
+            if (!dataset.links.find(link => link.target == node.id)) {
+                node.type = 'passive';
+            }
+        }
+    }
+
+    function parseData(text) {
+        var zigbeeDataset = {
+            nodes: [],
+            links: []
+        };
+
+        var state = null;
+        var counter = 0;
+        text.split(/\r?\n/).forEach(line => {
+            if (line == '') return;
+
+            // Parse markers
+            if (line == 'Child Data') {
+                state = 'children';
+                return;
+            }
+
+            if (line == 'Neighbor Table Entry') {
+                state = 'neighbors';
+                return;
+            }
+
+            if (line == 'Route Table Entry') {
+                state = 'routes';
+                return;
+            }
+
+            if (state === 'children') {
+                // No information for Child 1
+                if (!line.startsWith('child:')) return;
+
+                // child:[Dorm - Wall Button, 7C42, type:EMBER_SLEEPY_END_DEVICE]
+                const childRx = /child\:\[([^,]*),.*\]/g;
+                const deviceName = childRx.exec(line)[1];
+                addLink(zigbeeDataset, deviceName, 'Hubitat', 'child', 'child');
+                return;
+            }
+
+            if (state === 'neighbors') {
+                // [Bathroom - Fan, 1764], LQI:221, age:4, inCost:5, outCost:5
+                const neighborRx = /\[([^,]*),.*\], (.*)/g;
+                results = neighborRx.exec(line);
+                const deviceName = results[1];
+                const label = results[2].replaceAll(', ', ' ');
+                addLink(zigbeeDataset, 'Hubitat', deviceName, 'neighbor', label);
+                return;
+            }
+
+            if (state === 'routes') {
+                // status:Unused
+                if (line === 'status:Unused') return;
+
+                // status:Active, age:64, routeRecordState:0, concentratorType:None, [Livingroom - Wall Buttons #02, A198] via [Livingroom - Window Downlight Bulb #05, 6DA0]
+                const routeRx = /\[([^,]*),.*via \[([^,]*),.*\]/g;
+                results = routeRx.exec(line);
+                const leafName = results[1];
+                const routerName = results[2];
+                addLink(zigbeeDataset, leafName, routerName, 'route', 'route');
+                return;
+            }
+        });
+        
+        findPassiveNodes(zigbeeDataset);
+        return zigbeeDataset;
+    }
+
+    function renderGraph(text) {
+        const data = parseData(text);
+        console.log(data);
+
+        Graph = ForceGraph()(document.getElementById('graph'))
+            .graphData(data)
+            .nodeId('id')
+            .nodeLabel('id')
+            .linkLabel('label')
+            .linkColor(link => { return { child: '#FF00FF', neighbor: '#f79647', route: '#779e27' }[link.type]; })
+            .linkDirectionalParticles(1)
+            .linkCanvasObjectMode(() => 'after')
+            .nodeCanvasObject((node, ctx) => nodePaint(node, null, ctx))
+            .linkCanvasObject(linkPaint);
+
+        Graph.d3Force('charge').strength(-200);
+        setTimeout(() => Graph.zoomToFit(500, 50), 1000);
+    }
+
+    // Render Node
+    function nodePaint(node, color, ctx) {
+        
+        // Circle
+        ctx.fillStyle = { active: '#4f81bc', passive: '#9ACD32' }[node.type];
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, 3, 0, 2 * Math.PI, false);
+        ctx.fill();
+
+        ctx.lineWidth = 0.2;
+        ctx.strokeStyle = { active: '#33558b', passive: '#779e27' }[node.type];
+        ctx.stroke();
+
+        // Text
+        ctx.fillStyle = '#33558b';
+        ctx.font = '3px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(node.id, node.x, node.y + 5);
+    }
+
+    // Render link
+    function linkPaint(link, ctx) {
+        const MAX_FONT_SIZE = 4;
+        const LABEL_NODE_MARGIN = Graph.nodeRelSize() * 1.5;
+
+        const start = link.source;
+        const end = link.target;
+
+        // ignore unbound links
+        if (typeof start !== 'object' || typeof end !== 'object') return;
+
+        // calculate label positioning
+        const textPos = Object.assign(...['x', 'y'].map(c => ({
+            [c]: start[c] + (end[c] - start[c]) / 2 // calc middle point
+        })));
+
+        const relLink = { x: end.x - start.x, y: end.y - start.y };
+
+        const maxTextLength = Math.sqrt(Math.pow(relLink.x, 2) + Math.pow(relLink.y, 2)) - LABEL_NODE_MARGIN * 2;
+
+        let textAngle = Math.atan2(relLink.y, relLink.x);
+
+        // maintain label vertical orientation for legibility
+        if (textAngle > Math.PI / 2) textAngle = -(Math.PI - textAngle);
+        if (textAngle < -Math.PI / 2) textAngle = -(-Math.PI - textAngle);
+
+        const label = `${link.label}`;
+
+        // estimate fontSize to fit in link length
+        ctx.font = '2px monospace';
+        const fontSize = Math.min(MAX_FONT_SIZE, maxTextLength / ctx.measureText(label).width);
+        //ctx.font = `${fontSize}px monospace`;
+        const textWidth = ctx.measureText(label).width;
+        const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.2); // some padding
+
+        // draw text label (with background rect)
+        ctx.save();
+        ctx.translate(textPos.x + 1, textPos.y + 1);
+        ctx.rotate(textAngle);
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.fillRect(- bckgDimensions[0] / 2, - bckgDimensions[1] / 2, ...bckgDimensions);
+
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = 'darkgrey';
+        ctx.fillText(label, 0, 0);
+        ctx.restore();
+    }
+    </script>
+</body>
+</html>
