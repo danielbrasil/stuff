@@ -1,9 +1,27 @@
-<!-- Preview here: https://dan-danache.github.io/stuff/zigbee-graph.html -->
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Zigbee graph</title>
+    <title>Hubitat - Zigbee Graph</title>
     <meta charset="utf-8">
+    <meta name="description" content="Visual render of Hubitat's Zigbee data">
+    <meta name="keywords" content="hubitat, zigbee, graph">
+    <meta name="author" content="Agamemnon Dandanache">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="description" content="">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0">
+    <meta name="robots" content="noindex">
+    <meta name="mobile-web-app-capable" content="yes">
+    <link rel="apple-touch-icon" sizes="180x180" href="/ui2/images/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/ui2/images/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/ui2/images/favicon-16x16.png">
+    <link rel="icon" sizes="192x192" href="/ui2/images/favicon.ico">
+    <link rel="manifest" href="/ui2/images/site.webmanifest">
+    <link rel="mask-icon" href="/ui2/images/safari-pinned-tab.svg" color="#5bbad5">
+    <link rel="shortcut icon" href="/ui2/images/favicon.ico">
+    <meta name="msapplication-TileColor" content="#da532c">
+    <meta name="msapplication-config" content="/ui2/images/browserconfig.xml">
+    <meta name="theme-color" content="#ffffff">
+
     <script src="//unpkg.com/@github/tab-container-element@latest/dist/index.js" type="module"></script>
     <script src="//unpkg.com/force-graph"></script>
     <link rel="stylesheet" type="text/css" href="//necolas.github.io/normalize.css/8.0.1/normalize.css">
@@ -13,6 +31,10 @@
         margin: 0;
         padding: 0;
         font: 1rem sans-serif;
+    }
+
+    html {
+        -webkit-text-size-adjust: 100%;
     }
 
     /* Tabs */
@@ -196,20 +218,21 @@ EzspGetParentChildParametersResponse [childCount=6, parentEui64=0000000000000000
         renderGraph(text);
     }
 
-    function addNode(dataset, name) {
-        if (dataset.nodes.find(node => node.id === name)) return;
+    function addNode(dataset, { name, addr }) {
+        if (dataset.nodes.find(node => node.addr === addr)) return;
         dataset.nodes.push({
-            id: name,
+            name,
+            addr,
             type: 'active'
         });
     }
 
-    function addLink(dataset, source, target, type, label) {
-        addNode(dataset, source);
-        addNode(dataset, target);
+    function addLink(dataset, sourceNode, targetNode, type, label) {
+        addNode(dataset, sourceNode);
+        addNode(dataset, targetNode);
         dataset.links.push({
-            source: source,
-            target: target,
+            source: sourceNode.addr,
+            target: targetNode.addr,
             type: type,
             label: label
         });
@@ -217,7 +240,7 @@ EzspGetParentChildParametersResponse [childCount=6, parentEui64=0000000000000000
 
     function findPassiveNodes(dataset) {
         for (const node of dataset.nodes) {
-            if (!dataset.links.find(link => link.target == node.id)) {
+            if (!dataset.links.find(link => link.target == node.addr)) {
                 node.type = 'passive';
             }
         }
@@ -251,36 +274,50 @@ EzspGetParentChildParametersResponse [childCount=6, parentEui64=0000000000000000
             }
 
             if (state === 'children') {
-                // No information for Child 1
-                if (!line.startsWith('child:')) return;
+                if (!line.startsWith('child:') && !line.startsWith('[')) return;
 
                 // child:[Dorm - Wall Button, 7C42, type:EMBER_SLEEPY_END_DEVICE]
-                const childRx = /child\:\[([^,]*),.*\]/g;
-                const deviceName = childRx.exec(line)[1];
-                addLink(zigbeeDataset, deviceName, 'Hubitat', 'child', 'child');
+                const childRx = /\[([^,]*), ([^,]*), .*\]/g;
+                const childResults = childRx.exec(line);
+                addLink(
+                    zigbeeDataset,
+                    { name: childResults[1], addr: childResults[2]},           // source
+                    { name: 'Hubitat', addr: 'XXXX' },                         // target
+                    'child',                                                   // link type
+                    'child'                                                    // link label
+                );
                 return;
             }
 
             if (state === 'neighbors') {
+                if (!line.startsWith('[')) return;
+
                 // [Bathroom - Fan, 1764], LQI:221, age:4, inCost:5, outCost:5
-                const neighborRx = /\[([^,]*),.*\], (.*)/g;
-                results = neighborRx.exec(line);
-                const deviceName = results[1];
-                const label = results[2].replaceAll(', ', ' ');
-                addLink(zigbeeDataset, 'Hubitat', deviceName, 'neighbor', label);
+                const neighborRx = /\[([^,]*), ([^\]]*)\], (.*)/g;
+                const neighborResults = neighborRx.exec(line);
+                addLink(
+                    zigbeeDataset,
+                    { name: 'Hubitat', addr: 'XXXX' },                         // source
+                    { name: neighborResults[1], addr: neighborResults[2]},     // target
+                    'neighbor',                                                // link type
+                    neighborResults[3].replaceAll(', ', ' ')                   // link label
+                );
                 return;
             }
 
             if (state === 'routes') {
-                // status:Unused
-                if (line === 'status:Unused') return;
+                if (!line.startsWith('status:Active')) return;
 
                 // status:Active, age:64, routeRecordState:0, concentratorType:None, [Livingroom - Wall Buttons #02, A198] via [Livingroom - Window Downlight Bulb #05, 6DA0]
-                const routeRx = /\[([^,]*),.*via \[([^,]*),.*\]/g;
-                results = routeRx.exec(line);
-                const leafName = results[1];
-                const routerName = results[2];
-                addLink(zigbeeDataset, leafName, routerName, 'route', 'route');
+                const routeRx = /\[([^,]*), ([^\]]*)\] via \[([^,]*), ([^\]]*)\]/g;
+                const routeResult = routeRx.exec(line);
+                addLink(
+                    zigbeeDataset,
+                    { name: routeResult[1], addr: routeResult[2] },            // source
+                    { name: routeResult[3], addr: routeResult[4]},             // target
+                    'route',                                                   // link type
+                    'route'                                                    // link label
+                );
                 return;
             }
         });
@@ -295,14 +332,15 @@ EzspGetParentChildParametersResponse [childCount=6, parentEui64=0000000000000000
 
         Graph = ForceGraph()(document.getElementById('graph'))
             .graphData(data)
-            .nodeId('id')
-            .nodeLabel('id')
+            .nodeId('addr')
+            .nodeLabel('addr')
+            .nodeCanvasObject((node, ctx) => nodePaint(node, null, ctx))
             .linkLabel('label')
             .linkColor(link => { return { child: '#FF00FF', neighbor: '#f79647', route: '#779e27' }[link.type]; })
             .linkDirectionalParticles(1)
-            .linkCanvasObjectMode(() => 'after')
-            .nodeCanvasObject((node, ctx) => nodePaint(node, null, ctx))
-            .linkCanvasObject(linkPaint);
+            //.linkCanvasObjectMode(() => 'after')
+            //.linkCanvasObject(linkPaint)
+            .linkCurvature(link => link.source.addr == link.target.addr ? 1 : 0);
 
         Graph.d3Force('charge').strength(-200);
         setTimeout(() => Graph.zoomToFit(500, 50), 1000);
@@ -326,7 +364,7 @@ EzspGetParentChildParametersResponse [childCount=6, parentEui64=0000000000000000
         ctx.font = '3px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(node.id, node.x, node.y + 5);
+        ctx.fillText(node.name, node.x, node.y + 5);
     }
 
     // Render link
